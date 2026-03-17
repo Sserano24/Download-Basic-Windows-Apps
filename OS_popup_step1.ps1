@@ -37,23 +37,7 @@ $TempLogoPath = Join-Path $env:TEMP "proactive_logo.jpg"
 
 # Update script written to disk when user agrees; defined here to avoid
 # here-string parsing issues inside event scriptblocks.
-$UpdateScriptDir     = "$env:ProgramData\ProactiveIT"
-$UpdateScriptPath    = "$UpdateScriptDir\RunWindowsUpdate.ps1"
-$UpdateScriptContent = @'
-$session  = New-Object -ComObject Microsoft.Update.Session
-$searcher = $session.CreateUpdateSearcher()
-$result   = $searcher.Search("IsInstalled=0 and Type='Software'")
-
-if ($result.Updates.Count -gt 0) {
-    $downloader         = $session.CreateUpdateDownloader()
-    $downloader.Updates = $result.Updates
-    $downloader.Download()
-
-    $installer         = $session.CreateUpdateInstaller()
-    $installer.Updates = $result.Updates
-    $installer.Install()
-}
-'@
+$ScheduleFilePath = "$env:ProgramData\ProactiveIT\schedule.json"
 
 
 ############################################################
@@ -140,10 +124,23 @@ $timeComboBox.Size = New-Object System.Drawing.Size(180, 26)
 $timeComboBox.DropDownStyle = "DropDownList"
 $timeComboBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 
-@("5:00 PM","6:00 PM","7:00 PM","8:00 PM","9:00 PM","10:00 PM","11:00 PM") | ForEach-Object {
-    [void]$timeComboBox.Items.Add($_)
+$now = Get-Date
+foreach ($t in @("5:00 PM","6:00 PM","7:00 PM","8:00 PM","9:00 PM","10:00 PM","11:00 PM")) {
+    $candidate = $now.Date.Add(
+        [datetime]::ParseExact($t, "h:mm tt", [System.Globalization.CultureInfo]::InvariantCulture).TimeOfDay
+    )
+    if ($candidate -gt $now) {
+        [void]$timeComboBox.Items.Add($t)
+    }
 }
-$timeComboBox.SelectedIndex = 2   # Default: 7:00 PM
+
+if ($timeComboBox.Items.Count -gt 0) {
+    $timeComboBox.SelectedIndex = 0
+} else {
+    [void]$timeComboBox.Items.Add("No times available tonight")
+    $timeComboBox.SelectedIndex = 0
+    $timeComboBox.Enabled = $false
+}
 
 $form.Controls.Add($timeComboBox)
 
@@ -172,49 +169,12 @@ $AgreeButton.Add_Click({
         return
     }
 
-    # Parse selected time into today's trigger datetime
-    $parsedTime  = [datetime]::ParseExact(
-        $selectedTime.ToString(),
-        "h:mm tt",
-        [System.Globalization.CultureInfo]::InvariantCulture
-    )
-
-    $triggerTime = (Get-Date).Date.Add($parsedTime.TimeOfDay)
-
-    $taskName = "ProactiveIT_OSUpdate"
-
-    # Write the update script to a SYSTEM-accessible location
-    $null = New-Item -Path $UpdateScriptDir -ItemType Directory -Force
-    $UpdateScriptContent | Set-Content -Path $UpdateScriptPath -Encoding UTF8
-
-    # Build scheduled task components
-    $taskArgument = '-NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $UpdateScriptPath
-
-    $action = New-ScheduledTaskAction `
-        -Execute "PowerShell.exe" `
-        -Argument $taskArgument
-
-    $trigger = New-ScheduledTaskTrigger -Once -At $triggerTime
-
-    $settings = New-ScheduledTaskSettingsSet `
-        -ExecutionTimeLimit (New-TimeSpan -Hours 2) `
-        -MultipleInstances IgnoreNew
-
-    $principal = New-ScheduledTaskPrincipal `
-        -UserId "SYSTEM" `
-        -LogonType ServiceAccount `
-        -RunLevel Highest
-
-    # Remove any prior version of this task, then register fresh
-    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
-
-    Register-ScheduledTask `
-        -TaskName $taskName `
-        -Action $action `
-        -Trigger $trigger `
-        -Settings $settings `
-        -Principal $principal `
-        -Description "Proactive IT - Install missing Windows updates"
+    # Save the chosen time to disk so a separate script can read it
+    $null = New-Item -Path (Split-Path $ScheduleFilePath) -ItemType Directory -Force
+    [PSCustomObject]@{
+        ScheduledTime = $selectedTime.ToString()
+        ScheduledDate = (Get-Date -Format "yyyy-MM-dd")
+    } | ConvertTo-Json | Set-Content -Path $ScheduleFilePath -Encoding UTF8
 
     [System.Windows.Forms.MessageBox]::Show(
         "Your OS update is scheduled for $selectedTime tonight. Please keep your device on and plugged in, and save your work to prevent data loss.",
@@ -227,6 +187,10 @@ $AgreeButton.Add_Click({
 })
 
 $form.Controls.Add($AgreeButton)
+
+# Disable Agree if no future times were available
+if (-not $timeComboBox.Enabled) { $AgreeButton.Enabled = $false }
+
 ############################################################
 # SECTION 8 — Close Button
 # Closes popup without performing any action.
