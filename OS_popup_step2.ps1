@@ -47,50 +47,105 @@ $triggerTime = $scheduledDate.Add($parsedTime.TimeOfDay)
 
 
 ############################################################
-# SECTION 4 — Write Update + Reboot Script to Disk
-# Defined and written here (not inside a scriptblock) to
-# avoid here-string parsing issues.
+# SECTION 4 - Write Update + Reboot Script to Disk
+# Uses PSWindowsUpdate for patching. Single-quote here-string
+# preserves all $ signs so they evaluate at task runtime.
 ############################################################
 $null = New-Item -Path $UpdateScriptDir -ItemType Directory -Force
 
 @'
-$session  = New-Object -ComObject Microsoft.Update.Session
-$searcher = $session.CreateUpdateSearcher()
-$result   = $searcher.Search("IsInstalled=0 and Type='Software'")
+$LogPath = "$env:ProgramData\ProactiveIT\update_log.txt"
 
-if ($result.Updates.Count -gt 0) {
-    $updatesToDownload = New-Object -ComObject Microsoft.Update.UpdateColl
+function Write-Log {
+    param([string]$Message)
+    $ts   = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $line = "[$ts] $Message"
+    Write-Host $line
+    Add-Content -Path $LogPath -Value $line -Encoding UTF8
+}
 
-    for ($i = 0; $i -lt $result.Updates.Count; $i++) {
-        $update = $result.Updates.Item($i)
-        if (-not $update.EulaAccepted) {
-            $update.AcceptEula()
+# -------------------------------------------------------
+# TASK START - proof the device was on at scheduled time
+# -------------------------------------------------------
+Write-Log "=========================================="
+Write-Log "SCHEDULED TASK STARTED SUCCESSFULLY"
+Write-Log "Device was powered on at the scheduled time."
+Write-Log "=========================================="
+
+# -------------------------------------------------------
+# ENSURE PSWINDOWSUPDATE
+# -------------------------------------------------------
+Write-Log "Checking for PSWindowsUpdate module..."
+if (-not (Get-Module -ListAvailable -Name PSWindowsUpdate)) {
+    Write-Log "PSWindowsUpdate not found - installing..."
+    try {
+        if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope AllUsers | Out-Null
         }
-        $null = $updatesToDownload.Add($update)
+        Install-Module -Name PSWindowsUpdate -Force -Scope AllUsers -ErrorAction Stop
+        Write-Log "PSWindowsUpdate installed successfully."
+    } catch {
+        Write-Log "ERROR: Failed to install PSWindowsUpdate - $($_.Exception.Message)"
+        exit 1
     }
+} else {
+    Write-Log "PSWindowsUpdate module found."
+}
 
-    $downloader = $session.CreateUpdateDownloader()
-    $downloader.Updates = $updatesToDownload
-    $downloadResult = $downloader.Download()
+Import-Module PSWindowsUpdate -Force
 
-    $updatesToInstall = New-Object -ComObject Microsoft.Update.UpdateColl
+# -------------------------------------------------------
+# SCAN FOR UPDATES
+# -------------------------------------------------------
+Write-Log "------------------------------------------"
+Write-Log "UPDATE SCAN STARTING"
+Write-Log "------------------------------------------"
 
-    for ($i = 0; $i -lt $updatesToDownload.Count; $i++) {
-        $update = $updatesToDownload.Item($i)
-        if ($update.IsDownloaded) {
-            $null = $updatesToInstall.Add($update)
-        }
-    }
+try {
+    $updates = Get-WindowsUpdate -AcceptAll -ErrorAction Stop
+} catch {
+    Write-Log "ERROR: Update scan failed - $($_.Exception.Message)"
+    exit 1
+}
 
-    if ($updatesToInstall.Count -gt 0) {
-        $installer = $session.CreateUpdateInstaller()
-        $installer.Updates = $updatesToInstall
-        $installResult = $installer.Install()
+if ($updates.Count -eq 0) {
+    Write-Log "No missing updates found. Nothing to install."
+    exit 0
+}
 
-        if ($installResult.RebootRequired) {
-            Restart-Computer -Force
-        }
-    }
+Write-Log "Found $($updates.Count) update(s) to install:"
+foreach ($u in $updates) {
+    Write-Log "  - $($u.Title)"
+}
+
+# -------------------------------------------------------
+# INSTALL UPDATES
+# -------------------------------------------------------
+Write-Log "------------------------------------------"
+Write-Log "UPDATE INSTALLATION STARTING"
+Write-Log "------------------------------------------"
+
+try {
+    $result = Install-WindowsUpdate -AcceptAll -IgnoreReboot -ErrorAction Stop
+} catch {
+    Write-Log "ERROR: Update installation failed - $($_.Exception.Message)"
+    exit 1
+}
+
+Write-Log "Installation results:"
+foreach ($r in $result) {
+    Write-Log "  [$($r.Result)] $($r.Title)"
+}
+
+# -------------------------------------------------------
+# REBOOT IF REQUIRED
+# -------------------------------------------------------
+$rebootRequired = Get-WURebootStatus -Silent
+if ($rebootRequired) {
+    Write-Log "REBOOT REQUIRED - rebooting now..."
+    Restart-Computer -Force
+} else {
+    Write-Log "No reboot required. Update process complete."
 }
 '@ | Set-Content -Path $UpdateScriptPath -Encoding UTF8
 
