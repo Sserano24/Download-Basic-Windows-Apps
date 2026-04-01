@@ -28,7 +28,7 @@ $PopupMessage = "Hello, your device requires a reboot to complete pending mainte
  NOTE: Please save all open work before the scheduled time."
 $LogoURL      = "https://proactiveway.com/wp-content/uploads/2022/12/1.jpg"
 
-$FormWidth    = 420
+$FormWidth    = 450
 $FormHeight   = 380
 
 $TempLogoPath     = Join-Path $env:TEMP "proactive_logo.jpg"
@@ -92,7 +92,7 @@ $form.Controls.Add($pictureBox)
 $label = New-Object System.Windows.Forms.Label
 $label.Text = $PopupMessage
 $label.Location = New-Object System.Drawing.Point(20, 100)
-$label.Size = New-Object System.Drawing.Size(360, 100)
+$label.Size = New-Object System.Drawing.Size(410, 110)
 $label.TextAlign = "MiddleCenter"
 $label.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 
@@ -112,7 +112,7 @@ $form.Controls.Add($timeLabel)
 
 $timeComboBox = New-Object System.Windows.Forms.ComboBox
 $timeComboBox.Location = New-Object System.Drawing.Point(190, 207)
-$timeComboBox.Size = New-Object System.Drawing.Size(180, 26)
+$timeComboBox.Size = New-Object System.Drawing.Size(210, 26)
 $timeComboBox.DropDownStyle = "DropDownList"
 $timeComboBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 
@@ -200,9 +200,39 @@ $form.Controls.Add($CloseButton)
 
 
 ############################################################
+# SECTION 8b — Idle Timeout Timer
+# Auto-closes after 7 hours of no user response.
+# Cleans up any stale scheduled tasks and schedule file
+# left behind by the previous day's step1/step2 run.
+############################################################
+$idleTimer = New-Object System.Windows.Forms.Timer
+$idleTimer.Interval = 25200000   # 7 hours in milliseconds
+
+$idleTimer.Add_Tick({
+    $idleTimer.Stop()
+
+    # Remove stale scheduled tasks from both popup workflows
+    foreach ($task in @("ProactiveIT_RebootPopup", "ProactiveIT_RebootWarning", "ProactiveIT_UpdateAndReboot")) {
+        Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
+    }
+
+    # Remove stale schedule files from both popup workflows
+    foreach ($file in @($ScheduleFilePath, "$env:ProgramData\ProactiveIT\schedule.json")) {
+        if (Test-Path $file) {
+            Remove-Item -Path $file -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    $form.Close()
+})
+
+
+############################################################
 # SECTION 9 — Cleanup When Form Closes
 ############################################################
 $form.Add_FormClosed({
+    $idleTimer.Stop()
+    $idleTimer.Dispose()
     if ($pictureBox.Tag -is [System.IO.Stream]) {
         $pictureBox.Tag.Close()
         $pictureBox.Tag.Dispose()
@@ -213,5 +243,5 @@ $form.Add_FormClosed({
 ############################################################
 # SECTION 10 — Show Popup
 ############################################################
-$form.Add_Shown({ $form.Activate() })
+$form.Add_Shown({ $form.Activate(); $idleTimer.Start() })
 [void]$form.ShowDialog()

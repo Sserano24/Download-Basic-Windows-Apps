@@ -10,8 +10,11 @@
 ############################################################
 # SECTION 1 - Configuration
 ############################################################
-$ScheduleFilePath = "$env:ProgramData\ProactiveIT\reboot_schedule.json"
-$TaskName         = "ProactiveIT_RebootPopup"
+$ScheduleFilePath  = "$env:ProgramData\ProactiveIT\reboot_schedule.json"
+$ScriptDir         = "$env:ProgramData\ProactiveIT"
+$TaskName          = "ProactiveIT_RebootPopup"
+$WarningTaskName   = "ProactiveIT_RebootWarning"
+$WarningScriptPath = "$ScriptDir\Reboot_popup_warning.ps1"
 
 
 ############################################################
@@ -47,6 +50,80 @@ $scheduledDate = [datetime]::ParseExact(
 
 $triggerTime = $scheduledDate.Add($parsedTime.TimeOfDay)
 Write-Host "Trigger datetime: $triggerTime"
+
+
+############################################################
+# SECTION 3b - Write Warning Popup Script to Disk
+# Written here (top-level, not inside a scriptblock) to
+# avoid here-string parsing issues.
+# Runs as the logged-on user so the GUI appears on screen.
+############################################################
+$null = New-Item -Path $ScriptDir -ItemType Directory -Force
+
+@'
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+$script:remaining = 120
+
+$form = New-Object System.Windows.Forms.Form
+$form.Text            = "Reboot Warning"
+$form.Size            = New-Object System.Drawing.Size(300, 200)
+$form.StartPosition   = "CenterScreen"
+$form.Topmost         = $true
+$form.FormBorderStyle = "FixedDialog"
+$form.MaximizeBox     = $false
+$form.MinimizeBox     = $false
+
+$warningLabel           = New-Object System.Windows.Forms.Label
+$warningLabel.Text      = "Your device will reboot in:"
+$warningLabel.Location  = New-Object System.Drawing.Point(10, 18)
+$warningLabel.Size      = New-Object System.Drawing.Size(280, 22)
+$warningLabel.TextAlign = "MiddleCenter"
+$warningLabel.Font      = New-Object System.Drawing.Font("Segoe UI", 10)
+$form.Controls.Add($warningLabel)
+
+$countdownLabel           = New-Object System.Windows.Forms.Label
+$countdownLabel.Text      = "2:00"
+$countdownLabel.Location  = New-Object System.Drawing.Point(10, 45)
+$countdownLabel.Size      = New-Object System.Drawing.Size(280, 75)
+$countdownLabel.TextAlign = "MiddleCenter"
+$countdownLabel.Font      = New-Object System.Drawing.Font("Segoe UI", 36, [System.Drawing.FontStyle]::Bold)
+$form.Controls.Add($countdownLabel)
+
+$closeButton          = New-Object System.Windows.Forms.Button
+$closeButton.Text     = "Close"
+$closeButton.Width    = 80
+$closeButton.Height   = 28
+$closeButton.Location = New-Object System.Drawing.Point(110, 132)
+$closeButton.Add_Click({ $form.Close() })
+$form.Controls.Add($closeButton)
+
+$countdownTimer          = New-Object System.Windows.Forms.Timer
+$countdownTimer.Interval = 1000
+
+$countdownTimer.Add_Tick({
+    $script:remaining--
+    $minutes = [math]::Floor($script:remaining / 60)
+    $seconds = $script:remaining % 60
+    $countdownLabel.Text = "{0}:{1:D2}" -f $minutes, $seconds
+
+    if ($script:remaining -le 0) {
+        $countdownTimer.Stop()
+        $form.Close()
+    }
+})
+
+$form.Add_FormClosed({
+    $countdownTimer.Stop()
+    $countdownTimer.Dispose()
+})
+
+$form.Add_Shown({ $form.Activate(); $countdownTimer.Start() })
+[void]$form.ShowDialog()
+'@ | Set-Content -Path $WarningScriptPath -Encoding UTF8
+
+Write-Host "Warning popup script written to: $WarningScriptPath"
 
 
 ############################################################
@@ -93,6 +170,38 @@ if (-not $registered) {
 }
 
 Write-Host "Reboot task registered. Next run: $((Get-ScheduledTaskInfo -TaskName $TaskName).NextRunTime)"
+
+
+############################################################
+# SECTION 5b - Register Warning Popup Task
+# Runs 2 minutes before reboot as BUILTIN\Users (interactive)
+# so the countdown popup appears on the user's desktop.
+############################################################
+$warningAction = New-ScheduledTaskAction `
+    -Execute  "PowerShell.exe" `
+    -Argument "-ExecutionPolicy Bypass -File `"$WarningScriptPath`""
+
+$warningTrigger = New-ScheduledTaskTrigger -Once -At $triggerTime.AddMinutes(-2)
+
+$warningSettings = New-ScheduledTaskSettingsSet `
+    -ExecutionTimeLimit (New-TimeSpan -Minutes 5) `
+    -MultipleInstances IgnoreNew
+
+$warningPrincipal = New-ScheduledTaskPrincipal `
+    -GroupId   "BUILTIN\Users" `
+    -RunLevel  Limited
+
+Unregister-ScheduledTask -TaskName $WarningTaskName -Confirm:$false -ErrorAction SilentlyContinue
+
+Register-ScheduledTask `
+    -TaskName    $WarningTaskName `
+    -Action      $warningAction `
+    -Trigger     $warningTrigger `
+    -Settings    $warningSettings `
+    -Principal   $warningPrincipal `
+    -Description "Proactive IT - 2-minute reboot warning popup"
+
+Write-Host "Warning popup task registered. Fires at: $($triggerTime.AddMinutes(-2))"
 
 
 ############################################################

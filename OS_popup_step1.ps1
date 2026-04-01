@@ -209,10 +209,37 @@ $form.Controls.Add($CloseButton)
 
 
 ############################################################
+# SECTION 8b — Idle Timeout Timer
+# Auto-closes after 2 hours of no user response.
+# Cleans up any stale scheduled tasks and schedule file
+# left behind by the previous day's step1/step2 run.
+############################################################
+$idleTimer = New-Object System.Windows.Forms.Timer
+$idleTimer.Interval = 25200000   # 7 hours in milliseconds
+
+$idleTimer.Add_Tick({
+    $idleTimer.Stop()
+
+    # Remove stale scheduled task left by a previous step2 run
+    Unregister-ScheduledTask -TaskName "ProactiveIT_UpdateAndReboot" `
+        -Confirm:$false -ErrorAction SilentlyContinue
+
+    # Remove stale schedule file left by a previous step1 run
+    if (Test-Path $ScheduleFilePath) {
+        Remove-Item -Path $ScheduleFilePath -Force -ErrorAction SilentlyContinue
+    }
+
+    $form.Close()
+})
+
+
+############################################################
 # SECTION 9 — Cleanup When Form Closes
 # Prevents file lock issues by closing the image stream.
 ############################################################
 $form.Add_FormClosed({
+    $idleTimer.Stop()
+    $idleTimer.Dispose()
     if ($pictureBox.Tag -is [System.IO.Stream]) {
         $pictureBox.Tag.Close()
         $pictureBox.Tag.Dispose()
@@ -223,5 +250,5 @@ $form.Add_FormClosed({
 ############################################################
 # SECTION 10 — Show Popup
 ############################################################
-$form.Add_Shown({ $form.Activate() })
+$form.Add_Shown({ $form.Activate(); $idleTimer.Start() })
 [void]$form.ShowDialog()
