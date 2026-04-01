@@ -117,7 +117,7 @@ $timeComboBox.DropDownStyle = "DropDownList"
 $timeComboBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 
 $now = Get-Date
-foreach ($t in @("5:00 PM","5:30 PM","6:00 PM","7:00 PM","8:00 PM","9:00 PM","10:00 PM","11:00 PM")) {
+foreach ($t in @("5:00 PM","5:30 PM","6:00 PM","7:00 PM","8:00 PM","9:15 PM","10:00 PM","11:00 PM")) {
     $candidate = $now.Date.Add(
         [datetime]::ParseExact($t, "h:mm tt", [System.Globalization.CultureInfo]::InvariantCulture).TimeOfDay
     )
