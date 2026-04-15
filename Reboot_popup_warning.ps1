@@ -106,7 +106,7 @@ $closeButton                           = New-Object System.Windows.Forms.Button
 $closeButton.Text                      = "Close"
 $closeButton.Width                     = 115
 $closeButton.Height                    = 30
-$closeButton.Location                  = New-Object System.Drawing.Point(113, 175)
+$closeButton.Location                  = New-Object System.Drawing.Point(20, 175)
 $closeButton.FlatStyle                 = "Flat"
 $closeButton.BackColor                 = $colorBlue
 $closeButton.ForeColor                 = $colorWhite
@@ -114,6 +114,23 @@ $closeButton.Font                      = $fontButton
 $closeButton.FlatAppearance.BorderSize = 0
 $closeButton.Add_Click({ $form.Close() })
 $form.Controls.Add($closeButton)
+
+$cancelButton                           = New-Object System.Windows.Forms.Button
+$cancelButton.Text                      = "Cancel Reboot"
+$cancelButton.Width                     = 120
+$cancelButton.Height                    = 30
+$cancelButton.Location                  = New-Object System.Drawing.Point(195, 175)
+$cancelButton.FlatStyle                 = "Flat"
+$cancelButton.BackColor                 = $colorRed
+$cancelButton.ForeColor                 = $colorWhite
+$cancelButton.Font                      = $fontButton
+$cancelButton.FlatAppearance.BorderSize = 0
+$cancelButton.Add_Click({
+    Unregister-ScheduledTask -TaskName "ProactiveIT_RebootPopup"  -Confirm:$false -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName "ProactiveIT_RebootWarning" -Confirm:$false -ErrorAction SilentlyContinue
+    $form.Close()
+})
+$form.Controls.Add($cancelButton)
 
 
 ############################################################
