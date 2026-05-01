@@ -2,12 +2,25 @@
 # Proactive IT - Reboot Warning Popup
 #
 # Launched 2 minutes before the scheduled reboot.
-# Shows a live countdown, a close button, and a cancel button.
+# Shows a live countdown, a reboot now button, and a cancel button.
 # Works whether launched as SYSTEM or as a standard user.
 ############################################################
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+
+# Hide the console window when running as SYSTEM
+Add-Type -Name Window -Namespace Console -MemberDefinition @"
+    [DllImport("Kernel32.dll")]
+    public static extern IntPtr GetConsoleWindow();
+    [DllImport("User32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, Int32 nCmdShow);
+"@
+
+$consolePtr = [Console.Window]::GetConsoleWindow()
+if ($consolePtr -gt 0) {
+    [void][Console.Window]::ShowWindow($consolePtr, 0)  # 0 = SW_HIDE
+}
 
 $script:remaining = 120   # 2 minutes in seconds
 
@@ -100,35 +113,97 @@ $form.Controls.Add($noteLabel)
 
 
 ############################################################
-# SECTION 7 - Buttons (Close + Cancel Reboot)
+# SECTION 7 - Buttons (Reboot Now + Cancel Reboot)
 ############################################################
-$closeButton                           = New-Object System.Windows.Forms.Button
-$closeButton.Text                      = "Close"
-$closeButton.Width                     = 115
-$closeButton.Height                    = 30
-$closeButton.Location                  = New-Object System.Drawing.Point(20, 175)
-$closeButton.FlatStyle                 = "Flat"
-$closeButton.BackColor                 = $colorBlue
-$closeButton.ForeColor                 = $colorWhite
-$closeButton.Font                      = $fontButton
-$closeButton.FlatAppearance.BorderSize = 0
-$closeButton.Add_Click({ $form.Close() })
-$form.Controls.Add($closeButton)
+$rebootButton                           = New-Object System.Windows.Forms.Button
+$rebootButton.Text                      = "Reboot Now"
+$rebootButton.Width                     = 115
+$rebootButton.Height                    = 30
+$rebootButton.Location                  = New-Object System.Drawing.Point(20, 175)
+$rebootButton.FlatStyle                 = "Flat"
+$rebootButton.BackColor                 = $colorBlue
+$rebootButton.ForeColor                 = $colorWhite
+$rebootButton.Font                      = $fontButton
+$rebootButton.FlatAppearance.BorderSize = 0
+$rebootButton.Add_Click({
+    try {
+        # Unregister the warning task to prevent it from interfering
+        Unregister-ScheduledTask -TaskName "ProactiveIT_RebootWarning" -Confirm:$false -ErrorAction SilentlyContinue
+        # Trigger immediate restart
+        shutdown.exe /r /t 0 /f
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Failed to restart:`n$($_.Exception.Message)",
+            "Error",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        )
+    }
+})
+$form.Controls.Add($rebootButton)
 
 $cancelButton                           = New-Object System.Windows.Forms.Button
 $cancelButton.Text                      = "Cancel Reboot"
-$cancelButton.Width                     = 120
+$cancelButton.Width                     = 115
 $cancelButton.Height                    = 30
-$cancelButton.Location                  = New-Object System.Drawing.Point(195, 175)
+$cancelButton.Location                  = New-Object System.Drawing.Point(205, 175)
 $cancelButton.FlatStyle                 = "Flat"
 $cancelButton.BackColor                 = $colorRed
 $cancelButton.ForeColor                 = $colorWhite
 $cancelButton.Font                      = $fontButton
 $cancelButton.FlatAppearance.BorderSize = 0
 $cancelButton.Add_Click({
-    Unregister-ScheduledTask -TaskName "ProactiveIT_RebootPopup"  -Confirm:$false -ErrorAction SilentlyContinue
-    Unregister-ScheduledTask -TaskName "ProactiveIT_RebootWarning" -Confirm:$false -ErrorAction SilentlyContinue
-    $form.Close()
+    try {
+        # Create a cancellation flag file - this is the main cancellation mechanism
+        # The scheduled reboot wrapper will check this before executing
+        $cancelFlagPath = "$env:ProgramData\ProactiveIT\cancel_reboot.flag"
+        $cancelFlagDir = Split-Path $cancelFlagPath
+        
+        # Ensure the directory exists
+        if (-not (Test-Path $cancelFlagDir)) {
+            $null = New-Item -Path $cancelFlagDir -ItemType Directory -Force -ErrorAction SilentlyContinue
+        }
+        
+        # Write the cancellation flag
+        "CANCELLED_AT_$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" | Set-Content -Path $cancelFlagPath -Force -ErrorAction Stop
+        Write-Host "Cancellation flag created at: $cancelFlagPath"
+        
+        # Try to unregister the warning task (non-admin should be able to do this for their own tasks)
+        $unregWarning = $false
+        try {
+            Unregister-ScheduledTask -TaskName "ProactiveIT_RebootWarning" -Confirm:$false -ErrorAction Stop
+            $unregWarning = $true
+            Write-Host "Successfully unregistered ProactiveIT_RebootWarning task"
+        } catch {
+            Write-Host "Could not unregister warning task (this is OK, the cancellation flag will prevent reboot): $($_.Exception.Message)"
+        }
+        
+        # Try to unregister the main reboot task (will likely fail due to SYSTEM privileges)
+        $unregMain = $false
+        try {
+            Unregister-ScheduledTask -TaskName "ProactiveIT_RebootPopup" -Confirm:$false -ErrorAction Stop
+            $unregMain = $true
+            Write-Host "Successfully unregistered ProactiveIT_RebootPopup task"
+        } catch {
+            Write-Host "Could not unregister reboot task (this is OK, the cancellation flag will prevent reboot): $($_.Exception.Message)"
+        }
+        
+        # Show success message
+        [System.Windows.Forms.MessageBox]::Show(
+            "The scheduled reboot has been cancelled.`n`nThe system will no longer restart at the scheduled time.",
+            "Reboot Cancelled",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        )
+        $form.Close()
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Error during cancellation:`n$($_.Exception.Message)`n`nPlease contact your IT administrator.",
+            "Error",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        )
+    }
 })
 $form.Controls.Add($cancelButton)
 

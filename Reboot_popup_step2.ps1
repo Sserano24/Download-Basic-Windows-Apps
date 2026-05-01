@@ -154,9 +154,24 @@ $cancelButton.ForeColor                 = $colorWhite
 $cancelButton.Font                      = $fontButton
 $cancelButton.FlatAppearance.BorderSize = 0
 $cancelButton.Add_Click({
-    Unregister-ScheduledTask -TaskName "ProactiveIT_RebootPopup"  -Confirm:$false -ErrorAction SilentlyContinue
-    Unregister-ScheduledTask -TaskName "ProactiveIT_RebootWarning" -Confirm:$false -ErrorAction SilentlyContinue
-    $form.Close()
+    try {
+        Unregister-ScheduledTask -TaskName "ProactiveIT_RebootPopup"  -Confirm:$false -ErrorAction Stop
+        Unregister-ScheduledTask -TaskName "ProactiveIT_RebootWarning" -Confirm:$false -ErrorAction Stop
+        [System.Windows.Forms.MessageBox]::Show(
+            "The scheduled reboot has been cancelled.",
+            "Reboot Cancelled",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        )
+        $form.Close()
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Failed to cancel reboot:`n$($_.Exception.Message)",
+            "Error",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        )
+    }
 })
 $form.Controls.Add($cancelButton)
 
@@ -193,11 +208,36 @@ Write-Host "Warning popup script written to: $WarningScriptPath"
 
 
 ############################################################
+# SECTION 3.5 - Create Reboot Wrapper Script
+# This script checks for a cancellation flag before rebooting.
+# Allows the warning popup (running as non-admin) to cancel
+# the reboot by creating a flag file.
+############################################################
+$RebootWrapperPath = "$ScriptDir\reboot_wrapper.ps1"
+
+@'
+# Reboot Wrapper - checks cancellation flag before proceeding
+$cancelFlagPath = "$env:ProgramData\ProactiveIT\cancel_reboot.flag"
+
+if (Test-Path $cancelFlagPath) {
+    Write-Host "Reboot cancelled by user (flag file found). Exiting without reboot."
+    Remove-Item -Path $cancelFlagPath -Force -ErrorAction SilentlyContinue
+    exit 0
+}
+
+Write-Host "No cancellation flag found. Proceeding with reboot..."
+shutdown.exe /r /t 0 /f
+'@ | Set-Content -Path $RebootWrapperPath -Encoding UTF8
+
+Write-Host "Reboot wrapper script written to: $RebootWrapperPath"
+
+
+############################################################
 # SECTION 4 - Register Scheduled Reboot Task
 ############################################################
 
-# Call shutdown.exe directly - SYSTEM has full access, no wrapper needed
-$action = New-ScheduledTaskAction -Execute "shutdown.exe" -Argument "/r /t 0 /f"
+# Use wrapper script so cancellation flag can be checked
+$action = New-ScheduledTaskAction -Execute "PowerShell.exe" -Argument "-ExecutionPolicy Bypass -File `"$RebootWrapperPath`""
 
 $trigger = New-ScheduledTaskTrigger -Once -At $triggerTime
 

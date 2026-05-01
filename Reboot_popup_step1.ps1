@@ -216,8 +216,8 @@ $idleTimer.Add_Tick({
         Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
     }
 
-    # Remove stale schedule files from both popup workflows
-    foreach ($file in @($ScheduleFilePath, "$env:ProgramData\ProactiveIT\schedule.json")) {
+    # Remove stale schedule files and wrapper scripts
+    foreach ($file in @($ScheduleFilePath, "$env:ProgramData\ProactiveIT\schedule.json", "$env:ProgramData\ProactiveIT\reboot_wrapper.ps1", "$env:ProgramData\ProactiveIT\cancel_reboot.flag")) {
         if (Test-Path $file) {
             Remove-Item -Path $file -Force -ErrorAction SilentlyContinue
         }
