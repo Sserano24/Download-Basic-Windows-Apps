@@ -285,7 +285,7 @@ Write-Host "Reboot task registered. Next run: $((Get-ScheduledTaskInfo -TaskName
 ############################################################
 $warningAction = New-ScheduledTaskAction `
     -Execute  "PowerShell.exe" `
-    -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$WarningScriptPath`""
+    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$WarningScriptPath`""
 
 $warningTrigger = New-ScheduledTaskTrigger -Once -At $triggerTime.AddMinutes(-2)
 
